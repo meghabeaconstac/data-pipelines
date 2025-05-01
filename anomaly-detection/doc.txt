@@ -1,0 +1,138 @@
+
+1. Volume Baseline:
+```python
+volume_baseline = (historical_data.groupby(['beacon_id', 'hour_of_day', 'day_of_week'])['scan_count']
+                   .agg(['mean', 'std'])
+                   .reset_index())
+```
+
+This formula is based on statistical process control (SPC) principles. Here's why we group by these specific columns:
+
+```python
+# Example Data:
+historical_data = [
+    # beacon_id, bucket,                hour, day, scan_count
+    ['123', '2025-04-23 04:00:00',     4,    3,   100],  # Wednesday 4 AM
+    ['123', '2025-04-24 04:00:00',     4,    4,   120],  # Thursday 4 AM
+    ['123', '2025-04-25 04:00:00',     4,    5,    90],  # Friday 4 AM
+    ['123', '2025-04-23 14:00:00',    14,    3,   500],  # Wednesday 2 PM
+    ['123', '2025-04-24 14:00:00',    14,    4,   480],  # Thursday 2 PM
+]
+
+# After grouping:
+volume_baseline_example = {
+    ('123', 4, 3): {'mean': 100, 'std': 0},     # Wednesday 4 AM
+    ('123', 4, 4): {'mean': 120, 'std': 0},     # Thursday 4 AM
+    ('123', 4, 5): {'mean': 90, 'std': 0},      # Friday 4 AM
+    ('123', 14, 3): {'mean': 500, 'std': 0},    # Wednesday 2 PM
+    ('123', 14, 4): {'mean': 480, 'std': 0},    # Thursday 2 PM
+}
+```
+
+Why these groupings:
+1. `beacon_id`: Each QR code has its own usage pattern
+2. `hour_of_day`: Captures hourly patterns (e.g., business hours vs. off-hours)
+3. `day_of_week`: Captures weekly patterns (weekdays vs. weekends)
+
+2. Time Patterns:
+```python
+time_pattern = (
+    historical_data.groupby(['beacon_id', 'hour_of_day'])
+    .agg({
+        'scan_count': ['count', 'mean', 'std'],
+        'day_of_week': lambda x: set(x)  # Track which days this hour usually has activity
+    })
+    .reset_index()
+)
+```
+
+This looks at broader time patterns. Let's see why:
+
+```python
+# Using same example data:
+time_pattern_example = {
+    ('123', 4): {
+        'count': 3,                    # Seen 3 times at 4 AM
+        'mean_count': 103.33,          # Average scans at 4 AM
+        'std_count': 15.28,            # Variation in scans at 4 AM
+        'active_days': {3, 4, 5}       # Active on Wed, Thu, Fri
+    },
+    ('123', 14): {
+        'count': 2,                    # Seen 2 times at 2 PM
+        'mean_count': 490,             # Average scans at 2 PM
+        'std_count': 14.14,            # Variation in scans at 2 PM
+        'active_days': {3, 4}          # Active on Wed, Thu
+    }
+}
+```
+
+Why these calculations:
+
+1. `scan_count`: ['count', 'mean', 'std']
+   - `count`: How often this hour is used
+   ```python
+   # For 4 AM: 3 days have data
+   # For 2 PM: 2 days have data
+   ```
+
+   - `mean`: Average activity level for this hour
+   ```python
+   # 4 AM mean = (100 + 120 + 90) / 3 = 103.33
+   # 2 PM mean = (500 + 480) / 2 = 490
+   ```
+
+   - `std`: Normal variation in this hour
+   ```python
+   # 4 AM std = sqrt(((100-103.33)² + (120-103.33)² + (90-103.33)²) / 2) = 15.28
+   # 2 PM std = sqrt(((500-490)² + (480-490)²) / 1) = 14.14
+   ```
+
+2. `day_of_week`: lambda x: set(x)
+   - Tracks which days normally have activity
+   ```python
+   # 4 AM is active on days {3,4,5} (Wed, Thu, Fri)
+   # 2 PM is active on days {3,4} (Wed, Thu)
+   ```
+
+This helps detect two types of anomalies:
+
+1. Volume Anomalies:
+```python
+# If we see 200 scans on Thursday 4 AM:
+z_score = (200 - 120) / std  # Using Thursday's baseline
+# High z_score indicates unusual volume
+```
+
+2. Time Pattern Anomalies:
+```python
+# If we see scans on Saturday (day 6) at 4 AM:
+is_new_time = 6 not in {3,4,5}  # True, this is a new pattern
+# Or if we see 300 scans at 4 AM:
+z_score = (300 - 103.33) / 15.28  # High z_score indicates unusual activity
+```
+
+Example Scenarios:
+
+1. Regular Pattern:
+```python
+# Thursday 4 AM with 115 scans
+volume_z_score = (115 - 120) / std  # Close to normal
+is_new_time = 4 in {3,4,5}  # False, normal time
+# Result: No anomaly
+```
+
+2. Volume Anomaly:
+```python
+# Thursday 4 AM with 200 scans
+volume_z_score = (200 - 120) / std  # Very high
+is_new_time = 4 in {3,4,5}  # False, normal time
+# Result: Volume anomaly
+```
+
+3. Time Pattern Anomaly:
+```python
+# Saturday 4 AM with 110 scans
+volume_z_score = (110 - NA) / NA  # No baseline for Saturday
+is_new_time = 6 not in {3,4,5}  # True, new time
+# Result: Time pattern anomaly
+```
